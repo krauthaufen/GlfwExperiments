@@ -1,0 +1,18 @@
+framework: netstandard2.0, netcoreapp3.0
+source https://api.nuget.org/v3/index.json
+storage: none
+
+nuget FSharp.Core                           >= 4.6.2 lowest_matching: true
+
+nuget FSharp.Data.Adaptive                  ~> 0.0.17                                      
+nuget Aardvark.Base                         ~> 5.0.0-prerelease0008
+nuget Aardvark.Base.FSharp                  ~> 5.0.0-prerelease0008
+nuget Silk.NET.GLFW                         ~> 1.0.0-preview5
+nuget Silk.NET.OpenGL                       ~> 1.0.0-preview5
+nuget Unofficial.OpenTK                     ~> 3.0.17
+
+group Build
+framework: netstandard2.0
+source https://api.nuget.org/v3/index.json
+github aardvark-platform/aardvark.fake:v5
+nuget Fake.DotNet.Cli
