@@ -5,8 +5,28 @@ open Aardvark.Base
 open System.Threading
 open Silk.NET.GLFW
 open OpenTK.Graphics.OpenGL4
+open System.Runtime.InteropServices
 
 #nowarn "9"
+
+[<AutoOpen>]
+module MissingGlfwFunctions =
+    open System.Runtime.InteropServices
+
+    type private GetWindowContentScaleDel = delegate of nativeptr<WindowHandle> * byref<float32> * byref<float32> -> unit
+
+    let private dict = System.Collections.Concurrent.ConcurrentDictionary<Glfw, GetWindowContentScaleDel>()
+
+    let private getWindowScale (glfw : Glfw) =
+        dict.GetOrAdd(glfw, fun glfw ->
+            let m = glfw.Library.LoadFunction "glfwGetWindowContentScale"
+            Marshal.GetDelegateForFunctionPointer(m, typeof<GetWindowContentScaleDel>) |> unbox<GetWindowContentScaleDel>
+        )
+
+    type Glfw with
+        member x.GetWindowContentScale(win : nativeptr<WindowHandle>, [<Out>] sx : byref<float32>, [<Out>] sy : byref<float32>) =
+            getWindowScale(x).Invoke(win, &sx, &sy)
+
 
 module internal OpenTKContext = 
     open System.Runtime.InteropServices
@@ -91,16 +111,28 @@ module internal OpenTKContext =
         
 
 type internal WindowEvent =
-    | Resize of width : int * height : int
+    | Resize
     | Run of action : (unit -> unit)
 
 
 type KeyEvent(key : Keys, scanCode : int, action : InputAction, modifiers : KeyModifiers, keyName : string) =
     member x.Key = key
     member x.ScanCode = scanCode
-    member x.Actin = action
+    member x.Action = action
     member x.Modifiers = modifiers    
-    member x.Name = keyName    
+    member x.Name = keyName  
+
+    member x.IsRepeat = action = InputAction.Repeat
+
+type ResizeEvent(framebufferSize : V2i, physicalSize : V2i, windowSize : V2i) =
+    member x.FramebufferSize = framebufferSize
+    member x.PhysicalSize = physicalSize
+    member x.WindowSize = windowSize
+
+    override x.ToString() = 
+        sprintf "{ framebuffer: %A; physical: %A; window: %A }" framebufferSize physicalSize windowSize
+
+
 
 type Window internal(dummy : nativeptr<WindowHandle>, glfw : Glfw, win : nativeptr<WindowHandle>, ctx : OpenTK.Graphics.IGraphicsContext, info : OpenTK.Platform.IWindowInfo) =
     let mutable visible = false
@@ -109,6 +141,7 @@ type Window internal(dummy : nativeptr<WindowHandle>, glfw : Glfw, win : nativep
     let mutable events = System.Collections.Generic.List<WindowEvent>()
     let mutable mainThread : Thread = null
     let mutable size = V2i.II
+    let mutable damaged = true
 
     let mutable icon : option<PixImageMipMap> = None
 
@@ -128,9 +161,13 @@ type Window internal(dummy : nativeptr<WindowHandle>, glfw : Glfw, win : nativep
 
     let keyDown = Event<KeyEvent>()
     let keyUp = Event<KeyEvent>()
-    let resize = Event<V2i>()
+    let resize = Event<ResizeEvent>()
     let focus = Event<bool>()
+    let mouseMove = Event<V2d>()
 
+
+
+    let mutable scale = V2d.II
 
     let keyCallback =
         glfw.SetKeyCallback(win, GlfwCallbacks.KeyCallback(fun w k c a m ->
@@ -152,6 +189,47 @@ type Window internal(dummy : nativeptr<WindowHandle>, glfw : Glfw, win : nativep
             focus.Trigger(f)
         ))
 
+    let moveCallback =
+        glfw.SetCursorPosCallback(win, GlfwCallbacks.CursorPosCallback(fun w a b ->
+            
+            
+            mouseMove.Trigger(scale * V2d(a,b))
+        ))
+
+    let mutable damagedCallback =
+        glfw.SetWindowRefreshCallback(win, GlfwCallbacks.WindowRefreshCallback(fun w ->
+            damaged <- true
+        ))
+
+  
+    let getResizeEvent() =
+        let mutable fbo = V2i.Zero
+        let mutable ps = V2i.Zero
+        let mutable scale = V2f.Zero
+        let mutable border = Border2i()
+
+        glfw.GetFramebufferSize(win, &fbo.X, &fbo.Y)
+        glfw.GetWindowSize(win, &ps.X, &ps.Y)
+        glfw.GetWindowFrameSize(win, &border.Min.X, &border.Min.Y, &border.Max.X, &border.Max.Y)
+        glfw.GetWindowContentScale(win, &scale.X, &scale.Y)   
+        let ws = ps + V2i(border.Min.X, border.Min.Y)
+
+        let ps = V2i(round (float scale.X * float ps.X), round(float scale.Y * float ps.Y))
+        let ws = V2i(round (float scale.X * float ws.X), round(float scale.Y * float ws.Y))        
+
+        ResizeEvent(
+            fbo,
+            ps, 
+            ws
+        )
+
+
+
+
+
+
+
+
 
     member x.Context = ctx
     member x.WindowInfo = info
@@ -164,6 +242,8 @@ type Window internal(dummy : nativeptr<WindowHandle>, glfw : Glfw, win : nativep
     member x.Resize = resize.Publish
     [<CLIEvent>]
     member x.FocusChanged = focus.Publish
+    [<CLIEvent>]
+    member x.MouseMove = mouseMove.Publish
 
     member x.GetKeyName(key : Keys, code : int) =
         match keyNameCache.TryGetValue((key, code)) with
@@ -177,7 +257,7 @@ type Window internal(dummy : nativeptr<WindowHandle>, glfw : Glfw, win : nativep
         for e in evts do
             match e with
             | Run action -> action()
-            | Resize(w,h) -> resize.Trigger(V2i(w,h))
+            | Resize -> resize.Trigger(getResizeEvent())
 
     member internal x.Post(msg : WindowEvent) =
         lock eventLock (fun () ->
@@ -222,26 +302,66 @@ type Window internal(dummy : nativeptr<WindowHandle>, glfw : Glfw, win : nativep
                     else glfw.HideWindow(win)
                 )
 
-    member x.Focused
-        with get() =
-            x.Invoke(fun () -> glfw.GetWindowAttrib(win, WindowAttributeGetter.Focused))
-        and set (f : bool) =
-            x.Invoke(fun () ->
-                let c = glfw.GetWindowAttrib(win, WindowAttributeGetter.Focused)
-                if c <> f then 
-                    if f then glfw.FocusWindow(win)
-                    else glfw.FocusWindow(dummy)
-            )                
+    member x.Focus() = 
+        x.Invoke(fun () ->
+            let c = glfw.GetWindowAttrib(win, WindowAttributeGetter.Focused)
+            if not c then glfw.FocusWindow(win)
+        )       
 
-    member x.Size
+    member x.Focused = x.Invoke(fun () -> glfw.GetWindowAttrib(win, WindowAttributeGetter.Focused))             
+
+    member x.Scale = scale
+
+    member x.WindowSize
+        with get() =
+            x.Invoke(fun () ->
+                let mutable ps = V2i.Zero
+                let mutable scale = V2f.Zero
+                let mutable border = Border2i()
+
+                glfw.GetWindowSize(win, &ps.X, &ps.Y)
+                glfw.GetWindowFrameSize(win, &border.Min.X, &border.Min.Y, &border.Max.X, &border.Max.Y)
+                glfw.GetWindowContentScale(win, &scale.X, &scale.Y)   
+                let ws = ps + V2i(border.Min.X, border.Min.Y)
+                V2i(round (float scale.X * float ws.X), round(float scale.Y * float ws.Y))  
+            )
+        and set (v : V2i) = 
+            x.Invoke(fun () ->
+                let mutable scale = V2f.Zero
+                let mutable border = Border2i()
+
+                glfw.GetWindowFrameSize(win, &border.Min.X, &border.Min.Y, &border.Max.X, &border.Max.Y)
+                glfw.GetWindowContentScale(win, &scale.X, &scale.Y)   
+
+                let ws = V2i(round (float v.X / float scale.X), round(float v.Y / float scale.Y))  
+                let ps = V2i.Max(V2i.Zero, ws - border.Min)
+
+                glfw.SetWindowSize(win, ps.X, ps.Y)
+            )
+
+
+    member x.GetScreenPosition(pixel : V2d) =
+        x.Invoke(fun () ->
+            let s = x.Scale
+            let pixel = pixel / s
+            let (x,y) = glfw.GetWindowPos(win)
+            let p = V2d(x,y)
+            (p + pixel) * s
+        )            
+
+    member x.FramebufferSize
         with get() = 
             x.Invoke(fun () ->
-                let (w,h) = glfw.GetWindowSize(win)
+                let (w,h) = glfw.GetFramebufferSize(win)
                 V2i(w,h)
             )
-        and set (size : V2i) =
+        and set (v : V2i) =
             x.Invoke(fun () ->
-                glfw.SetWindowSize(win, size.X, size.Y)
+                let mutable scale = V2f.Zero
+                glfw.GetWindowContentScale(win, &scale.X, &scale.Y)   
+                let ws = V2i(round (float v.X / float scale.X), round(float v.Y / float scale.Y)) 
+
+                glfw.SetWindowSize(win, ws.X, ws.Y)
             )        
 
     member x.Icon 
@@ -272,9 +392,22 @@ type Window internal(dummy : nativeptr<WindowHandle>, glfw : Glfw, win : nativep
                     let l = System.Collections.Generic.List()
                     mipMaps l 0 img.ImageArray
                 | None ->
-                    glfw.SetWindowIcon(win, 0, NativePtr.zero)    
+                    glfw.SetWindowIcon(win, 0, NativePtr.zero)  
+
+                                  
                 icon <- v                            
             )
+
+    member x.Position
+        with get() = 
+            x.Invoke(fun () ->
+                let (x,y) = glfw.GetWindowPos(win)
+                V2i(x,y)
+            )
+        and set (pos : V2i) =   
+            x.Invoke(fun () ->
+                glfw.SetWindowPos(win, pos.X, pos.Y)
+            )        
 
     member x.Close() =
         x.Invoke(fun () ->
@@ -303,31 +436,34 @@ type Window internal(dummy : nativeptr<WindowHandle>, glfw : Glfw, win : nativep
                         Seq.empty
                 ) 
             let myEvents =                 
-                let (w,h)= glfw.GetWindowSize(win)
+                let (w,h)= glfw.GetFramebufferSize(win)
                 let s = V2i(w,h)                
                 if s <> size then 
                     size <- s
-                    Seq.append (Seq.singleton (Resize(w, h))) myEvents
+                    Seq.append (Seq.singleton Resize) myEvents
                 else 
                     myEvents
 
 
             x.RunEvents myEvents
-            if not (isNull ctx) then
-                GL.ClearColor(1.0f, 0.0f, 0.0f, 1.0f)
-                GL.Clear(ClearBufferMask.ColorBufferBit)
+            if damaged then
+                damaged <- false
+                Log.line "render"
+                if not (isNull ctx) then
+                    GL.ClearColor(1.0f, 0.0f, 0.0f, 1.0f)
+                    GL.Clear(ClearBufferMask.ColorBufferBit)
 
-                glfw.SwapBuffers(win)   
+                    glfw.SwapBuffers(win)   
 
-            if frameCounter >= 100 then
-                sw.Stop()
-                let str = sprintf "%.2ffps" (float frameCounter / sw.Elapsed.TotalSeconds)
-                glfw.SetWindowTitle(win, str)
-                frameCounter <- 0
-                sw.Restart()                
+                if frameCounter >= 100 then
+                    sw.Stop()
+                    let str = sprintf "%.2ffps" (float frameCounter / sw.Elapsed.TotalSeconds)
+                    glfw.SetWindowTitle(win, str)
+                    frameCounter <- 0
+                    sw.Restart()                
 
 
-            frameCounter <- frameCounter + 1                     
+                frameCounter <- frameCounter + 1                     
             
 
 
@@ -343,6 +479,7 @@ type WindowConfig =
         resizable : bool
         refreshRate : int
         opengl : option<int*int>
+        physicalSize : bool
     }    
 
 module Window = 
@@ -356,7 +493,11 @@ module Window =
     let private dummyWindow =
         glfw.WindowHint(WindowHintClientApi.ClientApi, ClientApi.NoApi)
         glfw.WindowHint(WindowHintBool.Visible, false)
-        let win = glfw.CreateWindow(32, 32, "", NativePtr.zero, NativePtr.zero)
+        glfw.WindowHint(WindowHintBool.Resizable, false)
+        glfw.WindowHint(WindowHintBool.Decorated, false)
+        glfw.WindowHint(WindowHintBool.TransparentFramebuffer, true)
+        let win = glfw.CreateWindow(1, 1, "", NativePtr.zero, NativePtr.zero)
+        glfw.SetWindowPos(win, 1000000000, 1000000000)
         win
 
     let create (cfg : WindowConfig) =
@@ -383,6 +524,10 @@ module Window =
                 glfw.WindowHint(WindowHintBool.DoubleBuffer, true)
                 glfw.WindowHint(WindowHintBool.OpenGLDebugContext, false)
                 glfw.WindowHint(WindowHintBool.ContextNoError, true)
+                if RuntimeInformation.IsOSPlatform(OSPlatform.OSX) then
+                    glfw.WindowHint(unbox<WindowHintBool> 0x00023001, cfg.physicalSize)
+
+                glfw.WindowHint(unbox<WindowHintBool> 0x0002200C, false)
                 match lastWindow with
                 | Some l -> parent <- l
                 | None -> ()
@@ -393,6 +538,10 @@ module Window =
             glfw.WindowHint(WindowHintBool.Resizable, cfg.resizable)
             glfw.WindowHint(WindowHintInt.RefreshRate, cfg.refreshRate)
             glfw.WindowHint(WindowHintBool.FocusOnShow, cfg.focus)
+
+
+            let m = glfw.GetPrimaryMonitor()
+
             let win = glfw.CreateWindow(cfg.width, cfg.height, cfg.title, NativePtr.zero, parent)
             if win = NativePtr.zero then failwith "GLFW could not create window"
 
