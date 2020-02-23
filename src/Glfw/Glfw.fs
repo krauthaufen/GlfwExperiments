@@ -91,34 +91,54 @@ module internal OpenTKContext =
         
 
 type internal WindowEvent =
-    | Redraw
     | Resize of width : int * height : int
     | Run of action : (unit -> unit)
 
 
-type KeyEvent(key : Keys, scanCode : int, action : InputAction, modifiers : KeyModifiers) =
+type KeyEvent(key : Keys, scanCode : int, action : InputAction, modifiers : KeyModifiers, keyName : string) =
     member x.Key = key
     member x.ScanCode = scanCode
     member x.Actin = action
-    member x.Modifiers = modifiers        
+    member x.Modifiers = modifiers    
+    member x.Name = keyName    
 
-type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, ctx : OpenTK.Graphics.IGraphicsContext, info : OpenTK.Platform.IWindowInfo) =
+type Window internal(dummy : nativeptr<WindowHandle>, glfw : Glfw, win : nativeptr<WindowHandle>, ctx : OpenTK.Graphics.IGraphicsContext, info : OpenTK.Platform.IWindowInfo) =
     let mutable visible = false
     let mutable closing = false
     let eventLock = obj()
     let mutable events = System.Collections.Generic.List<WindowEvent>()
     let mutable mainThread : Thread = null
-    let mutable size = (-1,-1)
+    let mutable size = V2i.II
+
+    let mutable icon : option<PixImageMipMap> = None
+
+    static let keyNameCache = System.Collections.Concurrent.ConcurrentDictionary<Keys * int, string>()
+
+    let getKeyName(key : Keys) (code : int) =
+        keyNameCache.GetOrAdd((key, code), fun (key, code) ->
+            let c = if code >= 0 then code else glfw.GetKeyScancode(int key)
+            let str = glfw.GetKeyName(int key, c)
+            if System.String.IsNullOrWhiteSpace str then
+                string key
+            else
+                let a = str.Substring(0, 1)
+                let b = str.Substring(1)   
+                a.ToUpper() + b
+        )
 
     let keyDown = Event<KeyEvent>()
     let keyUp = Event<KeyEvent>()
+    let resize = Event<V2i>()
+    let focus = Event<bool>()
 
 
     let keyCallback =
         glfw.SetKeyCallback(win, GlfwCallbacks.KeyCallback(fun w k c a m ->
+            let name = getKeyName k c
             match a with
-            | InputAction.Press -> keyDown.Trigger(KeyEvent(k, c, a, m))
-            | InputAction.Release -> keyUp.Trigger(KeyEvent(k, c, a, m))
+            | InputAction.Press -> keyDown.Trigger(KeyEvent(k, c, a, m, name))
+            | InputAction.Repeat -> keyDown.Trigger(KeyEvent(k,c, a, m, name))
+            | InputAction.Release -> keyUp.Trigger(KeyEvent(k, c, a, m, name))
             | _ -> ()
         ))
 
@@ -127,6 +147,12 @@ type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, ctx : OpenTK.Gr
             closing <- true
         ))
 
+    let focusCallback =
+        glfw.SetWindowFocusCallback(win, GlfwCallbacks.WindowFocusCallback(fun w f ->
+            focus.Trigger(f)
+        ))
+
+
     member x.Context = ctx
     member x.WindowInfo = info
 
@@ -134,12 +160,24 @@ type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, ctx : OpenTK.Gr
     member x.KeyDown = keyDown.Publish
     [<CLIEvent>]
     member x.KeyUp = keyUp.Publish
+    [<CLIEvent>]
+    member x.Resize = resize.Publish
+    [<CLIEvent>]
+    member x.FocusChanged = focus.Publish
+
+    member x.GetKeyName(key : Keys, code : int) =
+        match keyNameCache.TryGetValue((key, code)) with
+        | (true, name) -> name
+        | _ -> x.Invoke(fun () -> getKeyName key code)
+
+    member x.GetKeyName(key : Keys) = x.GetKeyName(key, -1)
+        
 
     member private x.RunEvents(evts : seq<WindowEvent>) =
         for e in evts do
             match e with
             | Run action -> action()
-            | _ -> ()
+            | Resize(w,h) -> resize.Trigger(V2i(w,h))
 
     member internal x.Post(msg : WindowEvent) =
         lock eventLock (fun () ->
@@ -147,14 +185,14 @@ type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, ctx : OpenTK.Gr
         )
         glfw.PostEmptyEvent()
 
-    member x.Invoke(action : unit -> 'r) =
+    member x.Invoke<'r>(action : unit -> 'r) : 'r =
         let t = Thread.CurrentThread
         if t = mainThread || isNull mainThread then
             mainThread <- t
             action()
         else            
             let m = obj()
-            let mutable result = None
+            let mutable result : option<Result<'r, exn>> = None
             let run() =
                 let value = 
                     try action() |> Result.Ok
@@ -174,13 +212,6 @@ type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, ctx : OpenTK.Gr
             | Result.Error e -> raise e
 
 
-    member x.Close() =
-        x.Invoke(fun () ->
-            glfw.HideWindow(win)
-            closing <- true
-        )
-        
-
     member x.IsVisible 
         with get() = visible
         and set v =
@@ -191,6 +222,68 @@ type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, ctx : OpenTK.Gr
                     else glfw.HideWindow(win)
                 )
 
+    member x.Focused
+        with get() =
+            x.Invoke(fun () -> glfw.GetWindowAttrib(win, WindowAttributeGetter.Focused))
+        and set (f : bool) =
+            x.Invoke(fun () ->
+                let c = glfw.GetWindowAttrib(win, WindowAttributeGetter.Focused)
+                if c <> f then 
+                    if f then glfw.FocusWindow(win)
+                    else glfw.FocusWindow(dummy)
+            )                
+
+    member x.Size
+        with get() = 
+            x.Invoke(fun () ->
+                let (w,h) = glfw.GetWindowSize(win)
+                V2i(w,h)
+            )
+        and set (size : V2i) =
+            x.Invoke(fun () ->
+                glfw.SetWindowSize(win, size.X, size.Y)
+            )        
+
+    member x.Icon 
+        with get() = icon
+        and set (v : option<PixImageMipMap>) =
+            x.Invoke(fun () ->
+                let inline toMatrix(img : PixImage<byte>) =
+                    let dst = Matrix<uint32>(img.Size)
+                    dst.SetMap(img.GetMatrix<C4b>(), fun c ->
+                        (uint32 c.A <<< 24) ||| (uint32 c.B <<< 16) ||| (uint32 c.G <<< 8) ||| (uint32 c.R)
+                    ) |> ignore
+                    dst
+
+                let rec mipMaps (acc : System.Collections.Generic.List<Image>) (i : int) (img : PixImage[]) =
+                    if i >= img.Length then
+                        let arr = acc.ToArray()
+                        use img = fixed arr
+                        glfw.SetWindowIcon(win, acc.Count, img)
+                    else
+                        let mat = toMatrix (img.[i].ToPixImage<byte>())
+                        use pdata = fixed mat.Data
+                        acc.Add(Image(Width = int mat.Size.X, Height = int mat.Size.Y, Pixels = NativePtr.cast pdata))
+
+                        mipMaps acc (i+1) img                       
+
+                match v with
+                | Some img ->
+                    let l = System.Collections.Generic.List()
+                    mipMaps l 0 img.ImageArray
+                | None ->
+                    glfw.SetWindowIcon(win, 0, NativePtr.zero)    
+                icon <- v                            
+            )
+
+    member x.Close() =
+        x.Invoke(fun () ->
+            glfw.HideWindow(win)
+            closing <- true
+        )
+        
+
+
     member x.Run() =
         mainThread <- Thread.CurrentThread
         closing <- false
@@ -199,26 +292,27 @@ type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, ctx : OpenTK.Gr
         let sw = System.Diagnostics.Stopwatch.StartNew()
 
         while not closing do
-            glfw.PollEvents()
-            // let myEvents = 
-            //     lock eventLock (fun () ->
-            //         let o = events
-            //         if o.Count > 0 then 
-            //             events <- System.Collections.Generic.List()
-            //             o :> seq<_>
-            //         else
-            //             Seq.empty
-            //     ) 
-            // let myEvents =                 
-            //     let ((w,h) as s) = glfw.GetWindowSize(win)
-            //     if s <> size then 
-            //         size <- s
-            //         Seq.append (Seq.singleton (Resize(w, h))) myEvents
-            //     else 
-            //         myEvents
+            glfw.WaitEvents()
+            let myEvents = 
+                lock eventLock (fun () ->
+                    let o = events
+                    if o.Count > 0 then 
+                        events <- System.Collections.Generic.List()
+                        o :> seq<_>
+                    else
+                        Seq.empty
+                ) 
+            let myEvents =                 
+                let (w,h)= glfw.GetWindowSize(win)
+                let s = V2i(w,h)                
+                if s <> size then 
+                    size <- s
+                    Seq.append (Seq.singleton (Resize(w, h))) myEvents
+                else 
+                    myEvents
 
 
-            //x.RunEvents myEvents
+            x.RunEvents myEvents
             if not (isNull ctx) then
                 GL.ClearColor(1.0f, 0.0f, 0.0f, 1.0f)
                 GL.Clear(ClearBufferMask.ColorBufferBit)
@@ -253,19 +347,24 @@ type WindowConfig =
 
 module Window = 
     let private l = obj()
-    let mutable private initialized = false
     let mutable private lastWindow = None
+   
+    let private glfw = Glfw.GetApi()
+    do if not (glfw.Init()) then
+        failwith "GLFW init failed"
+
+    let private dummyWindow =
+        glfw.WindowHint(WindowHintClientApi.ClientApi, ClientApi.NoApi)
+        glfw.WindowHint(WindowHintBool.Visible, false)
+        let win = glfw.CreateWindow(32, 32, "", NativePtr.zero, NativePtr.zero)
+        win
 
     let create (cfg : WindowConfig) =
         lock l (fun () ->
-            let glfw = Glfw.GetApi()
-            if not initialized then
-                if not (glfw.Init()) then
-                    failwith "GLFW init failed"
-                initialized <- true             
-
             let mutable glContext = false
             let mutable parent : nativeptr<WindowHandle> = NativePtr.zero
+            glfw.DefaultWindowHints()
+
             match cfg.opengl with
             | Some (major, minor) ->
                 glContext <- true
@@ -312,5 +411,5 @@ module Window =
                 ctx.LoadAll()          
 
             glfw.SwapInterval(0)
-            Window(glfw, win, ctx, info)
+            Window(dummyWindow, glfw, win, ctx, info)
         )
