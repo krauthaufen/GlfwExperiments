@@ -283,6 +283,11 @@ module Window =
             let m = t.GetMethod("LoadEntryPoints", System.Reflection.BindingFlags.NonPublic ||| System.Reflection.BindingFlags.Instance)
             let gl = OpenTK.Graphics.OpenGL4.GL()
             m.Invoke(gl, null) |> ignore
+
+            let t = typeof<OpenTK.Graphics.OpenGL.GL>
+            let m = t.GetMethod("LoadEntryPoints", System.Reflection.BindingFlags.NonPublic ||| System.Reflection.BindingFlags.Instance)
+            let gl = OpenTK.Graphics.OpenGL.GL()
+            m.Invoke(gl, null) |> ignore
         
         interface OpenTK.Graphics.IGraphicsContext with
             member x.Dispose(): unit = 

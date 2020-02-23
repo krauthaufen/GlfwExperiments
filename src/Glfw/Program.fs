@@ -6,6 +6,7 @@ open Glfw
 
 [<EntryPoint;STAThread>]
 let main argv = 
+
     let win = 
         Window.create {
             title = "Dummy"            
@@ -14,7 +15,7 @@ let main argv =
             resizable = true
             focus = true
             refreshRate = 0
-            opengl = None
+            opengl = Some(4,1)
         }
 
     win.KeyDown.Add(fun e ->

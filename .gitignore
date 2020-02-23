@@ -1,3 +1,5 @@
+**/.DS_Store
+/bin/
 /*.fsx.lock
 bin/Release
 bin/Debug
