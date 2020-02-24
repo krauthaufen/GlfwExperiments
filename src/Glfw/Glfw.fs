@@ -123,6 +123,28 @@ type KeyEvent(key : Keys, scanCode : int, action : InputAction, modifiers : KeyM
     member x.Name = keyName  
 
     member x.IsRepeat = action = InputAction.Repeat
+    member x.Alt = int (modifiers &&& KeyModifiers.Alt) <> 0
+    member x.Shift = int (modifiers &&& KeyModifiers.Shift) <> 0
+    member x.Ctrl = int (modifiers &&& KeyModifiers.Control) <> 0
+    member x.Super = int (modifiers &&& KeyModifiers.Super) <> 0
+
+    override x.ToString() =
+        let kind =
+            match action with
+            | InputAction.Press -> "KeyDown"
+            | InputAction.Repeat -> "KeyRepeat"
+            | InputAction.Release -> "KeyUp"
+            | _ -> "KeyUnknown"
+
+        let modifiers = 
+            [
+                if x.Alt then "alt"
+                if x.Shift then "shift"
+                if x.Ctrl then "ctrl"
+                if x.Super then "super"          
+            ]
+
+        sprintf "%s { value: %A; scan: %A; mod: [%s]; name: %s }" kind key scanCode (String.concat "; " modifiers) keyName
 
 type ResizeEvent(framebufferSize : V2i, physicalSize : V2i, windowSize : V2i) =
     member x.FramebufferSize = framebufferSize
@@ -130,18 +152,46 @@ type ResizeEvent(framebufferSize : V2i, physicalSize : V2i, windowSize : V2i) =
     member x.WindowSize = windowSize
 
     override x.ToString() = 
-        sprintf "{ framebuffer: %A; physical: %A; window: %A }" framebufferSize physicalSize windowSize
+        sprintf "Resize { framebuffer: %A; physical: %A; window: %A }" framebufferSize physicalSize windowSize
 
 
+type MouseEvent(button : MouseButton, position: V2d, action : InputAction, modifiers : KeyModifiers) =
+    member x.Button = button
+    member x.Action = action
+    member x.Modifiers = modifiers  
+    member x.IsRepeat = action = InputAction.Repeat
+    member x.Alt = int (modifiers &&& KeyModifiers.Alt) <> 0
+    member x.Shift = int (modifiers &&& KeyModifiers.Shift) <> 0
+    member x.Ctrl = int (modifiers &&& KeyModifiers.Control) <> 0
+    member x.Super = int (modifiers &&& KeyModifiers.Super) <> 0
 
-type Window internal(dummy : nativeptr<WindowHandle>, glfw : Glfw, win : nativeptr<WindowHandle>, ctx : OpenTK.Graphics.IGraphicsContext, info : OpenTK.Platform.IWindowInfo) =
+    override x.ToString() =
+        let kind =
+            match action with
+            | InputAction.Press -> "MouseDown"
+            | InputAction.Release -> "MouseUp"
+            | _ -> "MouseUnknown"
+
+        let modifiers = 
+            [
+                if x.Alt then "alt"
+                if x.Shift then "shift"
+                if x.Ctrl then "ctrl"
+                if x.Super then "super"          
+            ]
+
+        sprintf "%s { value: %A; mod: [%s]; position: %A }" kind button (String.concat "; " modifiers) position
+
+type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, title : string, ctx : OpenTK.Graphics.IGraphicsContext, info : OpenTK.Platform.IWindowInfo) =
     let mutable visible = false
     let mutable closing = false
     let eventLock = obj()
     let mutable events = System.Collections.Generic.List<WindowEvent>()
     let mutable mainThread : Thread = null
-    let mutable size = V2i.II
+    let mutable framebufferSize = V2i.II
+    let mutable windowScale = V2d.II
     let mutable damaged = true
+    let mutable title = title
 
     let mutable icon : option<PixImageMipMap> = None
 
@@ -158,16 +208,18 @@ type Window internal(dummy : nativeptr<WindowHandle>, glfw : Glfw, win : nativep
                 let b = str.Substring(1)   
                 a.ToUpper() + b
         )
+    let resize = Event<ResizeEvent>()
+    let focus = Event<bool>()
 
     let keyDown = Event<KeyEvent>()
     let keyUp = Event<KeyEvent>()
-    let resize = Event<ResizeEvent>()
-    let focus = Event<bool>()
+    let keyInput = Event<string>()
+
     let mouseMove = Event<V2d>()
+    let mouseDown = Event<MouseEvent>()
+    let mouseUp = Event<MouseEvent>()
+    let mouseWheel = Event<V2d>()
 
-
-
-    let mutable scale = V2d.II
 
     let keyCallback =
         glfw.SetKeyCallback(win, GlfwCallbacks.KeyCallback(fun w k c a m ->
@@ -177,6 +229,12 @@ type Window internal(dummy : nativeptr<WindowHandle>, glfw : Glfw, win : nativep
             | InputAction.Repeat -> keyDown.Trigger(KeyEvent(k,c, a, m, name))
             | InputAction.Release -> keyUp.Trigger(KeyEvent(k, c, a, m, name))
             | _ -> ()
+        ))
+
+    let inputCallback =
+        glfw.SetCharCallback(win, GlfwCallbacks.CharCallback (fun w c ->
+            let str = System.Text.Encoding.UTF32.GetString(System.BitConverter.GetBytes(c))
+            keyInput.Trigger(str)
         ))
 
     let closingCallback = 
@@ -191,10 +249,25 @@ type Window internal(dummy : nativeptr<WindowHandle>, glfw : Glfw, win : nativep
 
     let moveCallback =
         glfw.SetCursorPosCallback(win, GlfwCallbacks.CursorPosCallback(fun w a b ->
-            
-            
-            mouseMove.Trigger(scale * V2d(a,b))
+            mouseMove.Trigger(windowScale * V2d(a,b))
         ))
+
+    let mouseCallback =
+        glfw.SetMouseButtonCallback(win, GlfwCallbacks.MouseButtonCallback(fun w button action modifiers ->
+            let mutable pos = V2d.Zero
+            glfw.GetCursorPos(win, &pos.X, &pos.Y)
+            let pos = windowScale * pos
+            let evt = MouseEvent(button, pos, action, modifiers)
+            match action with
+            | InputAction.Press -> mouseDown.Trigger evt    
+            | InputAction.Release -> mouseUp.Trigger evt
+            | _ -> ()       
+        ))    
+
+    let whellCallback =
+        glfw.SetScrollCallback(win, GlfwCallbacks.ScrollCallback(fun w dx dy ->
+            mouseWheel.Trigger(V2d(dx, dy))
+        ))    
 
     let mutable damagedCallback =
         glfw.SetWindowRefreshCallback(win, GlfwCallbacks.WindowRefreshCallback(fun w ->
@@ -212,6 +285,7 @@ type Window internal(dummy : nativeptr<WindowHandle>, glfw : Glfw, win : nativep
         glfw.GetWindowSize(win, &ps.X, &ps.Y)
         glfw.GetWindowFrameSize(win, &border.Min.X, &border.Min.Y, &border.Max.X, &border.Max.Y)
         glfw.GetWindowContentScale(win, &scale.X, &scale.Y)   
+        windowScale <- V2d scale
         let ws = ps + V2i(border.Min.X, border.Min.Y)
 
         let ps = V2i(round (float scale.X * float ps.X), round(float scale.Y * float ps.Y))
@@ -224,26 +298,36 @@ type Window internal(dummy : nativeptr<WindowHandle>, glfw : Glfw, win : nativep
         )
 
 
-
-
-
-
-
-
-
     member x.Context = ctx
     member x.WindowInfo = info
+
+    [<CLIEvent>]
+    member x.Resize = resize.Publish
+    [<CLIEvent>]
+    member x.FocusChanged = focus.Publish
 
     [<CLIEvent>]
     member x.KeyDown = keyDown.Publish
     [<CLIEvent>]
     member x.KeyUp = keyUp.Publish
     [<CLIEvent>]
-    member x.Resize = resize.Publish
+    member x.KeyInput = keyInput.Publish
+
     [<CLIEvent>]
-    member x.FocusChanged = focus.Publish
+    member x.MouseDown = mouseDown.Publish
+    [<CLIEvent>]
+    member x.MouseUp = mouseUp.Publish
     [<CLIEvent>]
     member x.MouseMove = mouseMove.Publish
+    [<CLIEvent>]
+    member x.MouseWheel = mouseWheel.Publish
+
+    member x.MousePosition =
+        x.Invoke(fun () ->
+            let mutable pos = V2d.Zero
+            glfw.GetCursorPos(win, &pos.X, &pos.Y)
+            pos * windowScale
+        )
 
     member x.GetKeyName(key : Keys, code : int) =
         match keyNameCache.TryGetValue((key, code)) with
@@ -302,6 +386,15 @@ type Window internal(dummy : nativeptr<WindowHandle>, glfw : Glfw, win : nativep
                     else glfw.HideWindow(win)
                 )
 
+    member x.Title 
+        with get() = title
+        and set t =
+            x.Invoke(fun () ->
+                if title <> t then
+                    title <- t
+                    glfw.SetWindowTitle(win, t)
+            ) 
+
     member x.Focus() = 
         x.Invoke(fun () ->
             let c = glfw.GetWindowAttrib(win, WindowAttributeGetter.Focused)
@@ -309,8 +402,6 @@ type Window internal(dummy : nativeptr<WindowHandle>, glfw : Glfw, win : nativep
         )       
 
     member x.Focused = x.Invoke(fun () -> glfw.GetWindowAttrib(win, WindowAttributeGetter.Focused))             
-
-    member x.Scale = scale
 
     member x.WindowSize
         with get() =
@@ -338,16 +429,6 @@ type Window internal(dummy : nativeptr<WindowHandle>, glfw : Glfw, win : nativep
 
                 glfw.SetWindowSize(win, ps.X, ps.Y)
             )
-
-
-    member x.GetScreenPosition(pixel : V2d) =
-        x.Invoke(fun () ->
-            let s = x.Scale
-            let pixel = pixel / s
-            let (x,y) = glfw.GetWindowPos(win)
-            let p = V2d(x,y)
-            (p + pixel) * s
-        )            
 
     member x.FramebufferSize
         with get() = 
@@ -398,11 +479,12 @@ type Window internal(dummy : nativeptr<WindowHandle>, glfw : Glfw, win : nativep
                 icon <- v                            
             )
 
-    member x.Position
+    member x.WindowPosition
         with get() = 
             x.Invoke(fun () ->
-                let (x,y) = glfw.GetWindowPos(win)
-                V2i(x,y)
+                let mutable pos = V2i.Zero
+                glfw.GetWindowPos(win, &pos.X, &pos.Y)
+                pos
             )
         and set (pos : V2i) =   
             x.Invoke(fun () ->
@@ -414,8 +496,6 @@ type Window internal(dummy : nativeptr<WindowHandle>, glfw : Glfw, win : nativep
             glfw.HideWindow(win)
             closing <- true
         )
-        
-
 
     member x.Run() =
         mainThread <- Thread.CurrentThread
@@ -435,20 +515,22 @@ type Window internal(dummy : nativeptr<WindowHandle>, glfw : Glfw, win : nativep
                     else
                         Seq.empty
                 ) 
-            let myEvents =                 
-                let (w,h)= glfw.GetFramebufferSize(win)
-                let s = V2i(w,h)                
-                if s <> size then 
-                    size <- s
+            let myEvents =     
+                let mutable s = V2i.Zero            
+                glfw.GetFramebufferSize(win, &s.X, &s.Y)       
+                if s <> framebufferSize then 
+                    framebufferSize <- s
                     Seq.append (Seq.singleton Resize) myEvents
                 else 
                     myEvents
 
 
             x.RunEvents myEvents
+
+            x.Title <- sprintf "mouse: %s" (x.MousePosition.ToString("0.00"))
+
             if damaged then
                 damaged <- false
-                Log.line "render"
                 if not (isNull ctx) then
                     GL.ClearColor(1.0f, 0.0f, 0.0f, 1.0f)
                     GL.Clear(ClearBufferMask.ColorBufferBit)
@@ -457,8 +539,7 @@ type Window internal(dummy : nativeptr<WindowHandle>, glfw : Glfw, win : nativep
 
                 if frameCounter >= 100 then
                     sw.Stop()
-                    let str = sprintf "%.2ffps" (float frameCounter / sw.Elapsed.TotalSeconds)
-                    glfw.SetWindowTitle(win, str)
+                    Log.line "%.2ffps" (float frameCounter / sw.Elapsed.TotalSeconds)
                     frameCounter <- 0
                     sw.Restart()                
 
@@ -560,5 +641,5 @@ module Window =
                 ctx.LoadAll()          
 
             glfw.SwapInterval(0)
-            Window(dummyWindow, glfw, win, ctx, info)
+            Window(glfw, win, cfg.title, ctx, info)
         )

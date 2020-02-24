@@ -16,13 +16,16 @@ let main argv =
             focus = true
             refreshRate = 0
             opengl = Some(4,1)
-            physicalSize = true
+            physicalSize = false
         }
 
     let name = win.GetKeyName(Silk.NET.GLFW.Keys.Slash)
     Log.warn "Slash: %s" name
 
 
+    // win.MouseMove.Add (fun e ->
+    //     win.Title <- sprintf "mouse: %s" (e.ToString("0.00"))
+    // )
 
     win.FocusChanged.Add(fun e ->
         Log.warn "focus: %A" e
@@ -35,16 +38,31 @@ let main argv =
     win.KeyDown.Add(fun e ->
         if not e.IsRepeat then
             if e.Key = Silk.NET.GLFW.Keys.Escape then win.Close()
-            else Log.warn "down %A (%d)" e.Name (int e.Key)
-        if e.Key = Silk.NET.GLFW.Keys.Right then win.Position <- win.Position + V2i(20, 0)
-        elif e.Key = Silk.NET.GLFW.Keys.Left then win.Position <- win.Position - V2i(20, 0)
+            else Log.warn "down %A" e
+
+        if e.Key = Silk.NET.GLFW.Keys.Right then win.WindowPosition <- win.WindowPosition + V2i(20, 0)
+        elif e.Key = Silk.NET.GLFW.Keys.Left then win.WindowPosition <- win.WindowPosition - V2i(20, 0)
+        elif e.Key = Silk.NET.GLFW.Keys.Up then win.WindowPosition <- win.WindowPosition - V2i(0, 20)
+        elif e.Key = Silk.NET.GLFW.Keys.Down then win.WindowPosition <- win.WindowPosition + V2i(0, 20)
         elif e.Key = Silk.NET.GLFW.Keys.R then win.WindowSize <- V2i(50, 50)
         elif e.Key = Silk.NET.GLFW.Keys.T then win.WindowSize <- V2i(1024, 768)
         elif e.Key = Silk.NET.GLFW.Keys.Q then win.FramebufferSize <- V2i(50, 50)
         elif e.Key = Silk.NET.GLFW.Keys.W then win.FramebufferSize <- V2i(1024, 768)
-
-        Log.warn "%A %A" win.FramebufferSize win.WindowSize
     )
+
+    win.KeyInput.Add(fun str ->
+        Log.warn "input: %A" str
+    )
+
+    win.MouseDown.Add (fun e ->
+        Log.warn "%A" e
+    )
+
+    win.MouseWheel.Add (fun e ->
+        Log.warn "wheel: %A" e
+    )
+
+
     win.KeyUp.Add(fun e ->
         Log.warn "up %A" e.Key
     )
