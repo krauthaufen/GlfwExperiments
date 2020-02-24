@@ -72,6 +72,8 @@ let main argv =
             System.Threading.Tasks.Task.Delay(1000).ContinueWith(fun _ -> win.IsVisible <- true) |> ignore
         elif e.Key = Keys.F12 then
             win.Floating <- not win.Floating
+        elif e.Key = Keys.Enter then
+            win.Fullcreen <- not win.Fullcreen
     )
 
     win.KeyInput.Add(fun str ->

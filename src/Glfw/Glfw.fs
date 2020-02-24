@@ -473,7 +473,7 @@ type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, title : string,
 
 
     let getFrameBorder() =
-        if glfw.GetWindowAttrib(win, WindowAttributeGetter.Decorated) then
+        if glfw.GetWindowAttrib(win, WindowAttributeGetter.Decorated) && glfw.GetWindowMonitor(win) = NativePtr.zero then
             let mutable border = Border2i()
             glfw.GetWindowFrameSize(win, &border.Min.X, &border.Min.Y, &border.Max.X, &border.Max.Y)
             if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && System.Environment.OSVersion.Version.Major = 10 then
@@ -619,6 +619,9 @@ type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, title : string,
             else mouseLeave.Trigger(getMousePosition())
         ))    
 
+    let mutable beforeFullScreen = Box2i.FromMinAndSize(V2i.Zero, V2i(1024, 768))
+
+
     member x.Dispose() =
         glfw.HideWindow(win)
         glfw.DestroyWindow(win)
@@ -679,6 +682,29 @@ type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, title : string,
     member x.Decorated
         with get() = x.Invoke(fun () -> glfw.GetWindowAttrib(win, WindowAttributeGetter.Decorated))
         and set b = x.Invoke(fun () -> glfw.SetWindowAttrib(win, WindowAttributeSetter.Decorated, b))         
+
+    member x.Fullcreen
+        with get() = 
+            x.Invoke(fun () -> 
+                glfw.GetWindowMonitor(win) <> NativePtr.zero
+            )
+        and set f =
+            x.Invoke(fun () ->
+                if f then 
+                    let o = x.ContentPosition
+                    let s = x.FramebufferSize
+                    beforeFullScreen <- Box2i.FromMinAndSize(o, s)
+                    let m = glfw.GetPrimaryMonitor()
+                    let (x,y,w,h) = glfw.GetMonitorWorkarea(m)
+                    let mode = glfw.GetVideoMode(m) |> NativePtr.read
+                    glfw.SetWindowMonitor(win, m, x, y, w, h, mode.RefreshRate)
+                else
+                    let o = beforeFullScreen.Min
+                    let s = beforeFullScreen.Size
+                    glfw.SetWindowMonitor(win, NativePtr.zero, o.X, o.Y, s.X, s.Y, 0)
+                damaged <- true                    
+                glfw.PostEmptyEvent()                            
+            )        
 
     member x.Floating
         with get() = x.Invoke(fun () -> glfw.GetWindowAttrib(win, WindowAttributeGetter.Floating))
@@ -907,6 +933,7 @@ type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, title : string,
                 glfw.GetFramebufferSize(win, &s.X, &s.Y)       
                 if s <> framebufferSize then 
                     framebufferSize <- s
+                    damaged <- true
                     Seq.append (Seq.singleton Resize) myEvents
                 else 
                     myEvents
@@ -917,6 +944,8 @@ type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, title : string,
             if damaged then
                 damaged <- false
                 if not (isNull ctx) then
+                    let s = x.FramebufferSize
+                    GL.Viewport(0, 0, s.X, s.Y)
                     GL.ClearColor(1.0f, 0.0f, 0.0f, 0.5f)
                     GL.Clear(ClearBufferMask.ColorBufferBit)
 
@@ -981,10 +1010,15 @@ module Window =
                 glfw.WindowHint(WindowHintInt.ContextVersionMinor, minor)
                 glfw.WindowHint(WindowHintInt.DepthBits, 24)
                 glfw.WindowHint(WindowHintInt.StencilBits, 8)
-                glfw.WindowHint(WindowHintInt.RedBits, 8)
-                glfw.WindowHint(WindowHintInt.GreenBits, 8)
-                glfw.WindowHint(WindowHintInt.BlueBits, 8)
-                glfw.WindowHint(WindowHintInt.AlphaBits, 8)
+
+
+                let m = glfw.GetPrimaryMonitor()
+                let mode = glfw.GetVideoMode(m) |> NativePtr.read
+                glfw.WindowHint(WindowHintInt.RedBits, mode.RedBits)
+                glfw.WindowHint(WindowHintInt.GreenBits, mode.GreenBits)
+                glfw.WindowHint(WindowHintInt.BlueBits, mode.BlueBits)
+                glfw.WindowHint(WindowHintInt.AlphaBits, if cfg.transparent then 8 else 0)
+                glfw.WindowHint(WindowHintInt.RefreshRate, mode.RefreshRate)
                 glfw.WindowHint(WindowHintOpenGlProfile.OpenGlProfile, OpenGlProfile.Core)
                 glfw.WindowHint(WindowHintRobustness.ContextRobustness, Robustness.LoseContextOnReset)
                 glfw.WindowHint(WindowHintBool.OpenGLForwardCompat, true)
