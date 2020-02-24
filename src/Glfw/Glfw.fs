@@ -602,7 +602,6 @@ type Application() =
             while queue.TryDequeue(&action) do
                 try action()
                 with _ -> ()
-
             for w in visibleWindows do
                 w.Redraw()
  
@@ -715,6 +714,7 @@ and Window internal(app : Application, win : nativeptr<WindowHandle>, title : st
             let evt = getResizeEvent()
             resize.Trigger evt     
             damaged <- true
+            this.Redraw()
         ))
 
     let maxCb =
@@ -1088,17 +1088,17 @@ and Window internal(app : Application, win : nativeptr<WindowHandle>, title : st
     member internal x.Redraw() =
         if x.IsVisible then
             
-            if true || damaged then
+            if damaged then
                 damaged <- false
                 if not (isNull ctx) then
                     ctx.MakeCurrent(info)
                     let s = x.FramebufferSize
                     GL.Viewport(0, 0, s.X, s.Y)
-                    GL.ClearColor(1.0f, 0.0f, 0.0f, 0.5f)
+                    GL.ClearColor(0.1f, 0.0f, 0.0f, 0.1f)
                     GL.Clear(ClearBufferMask.ColorBufferBit)
 
                     glfw.SwapBuffers(win)  
-                    ctx.MakeCurrent(null)    
+                    ctx.MakeCurrent(null)                 
 
     member x.Run() =
         app.Run(x)

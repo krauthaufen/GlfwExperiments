@@ -104,12 +104,10 @@ let main argv =
         img.GetMatrix<C4b>().SetByCoord (fun (c : V2l) ->
             let tc = (V2d c + V2d.Half) / V2d img.Size
             let ndc = 2.0 * tc - V2d.II
-            // if ndc.Length > 0.8 then C4b(0uy,0uy,0uy,0uy)
-            // else C4b.VRVisGreen
             let color =
                 let c = c / V2l gridSize
-                if (c.X + c.Y) % 2L = 0L then C4b.VRVisGreen
-                else C4b(0uy, 0uy, 0uy, 127uy)
+                if (c.X + c.Y) % 2L = 0L then C4b.Red
+                else C4b(0uy, 0uy, 0uy, 0uy)
 
 
 
@@ -128,6 +126,7 @@ let main argv =
 
     let sizes = [| 16; 24; 32; 48; 64; 128; 256 |]
 
+    //Aardvark.Init()
     let icon = sizes |> Array.map (fun s -> createIcon (V2i.II * s) :> PixImage) |> PixImageMipMap
     win.Icon <- Some icon
 
