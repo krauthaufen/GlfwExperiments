@@ -258,7 +258,7 @@ module internal OpenTKContext =
 
     type MyWindowInfo(win : nativeptr<WindowHandle>) =
         let mutable win = win
-        interface OpenTK.Platform.IWindowInfo with
+        interface IWindowInfo with
             member x.Dispose(): unit = 
                 win <- NativePtr.zero
 
@@ -411,20 +411,216 @@ type WindowState =
     | Invisible = 3
 
 
-type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, title : string, ctx : OpenTK.Graphics.IGraphicsContext, info : OpenTK.Platform.IWindowInfo) =
+open System.Threading.Tasks
+
+
+type WindowConfig =
+    {
+        title : string
+        width : int
+        height : int
+        focus : bool
+        resizable : bool
+        refreshRate : int
+        transparent : bool
+        opengl : option<int*int>
+        physicalSize : bool
+    }    
+
+[<Sealed>]
+type Application() =
+    [<System.ThreadStatic; DefaultValue>]
+    static val mutable private IsMainThread_ : bool
+
+
+    let glfw =   
+        let api = Glfw.GetApi()
+        if not (api.Init()) then failwith "GLFW init failed"
+        api
+    do Application.IsMainThread_ <- true
+
+    let mutable lastWindow = None
+
+    let mutable running = false
+
+    let existingWindows = System.Collections.Concurrent.ConcurrentHashSet<Window>()
+    let visibleWindows = System.Collections.Concurrent.ConcurrentHashSet<Window>()
+
+    let mutable queue = System.Collections.Concurrent.ConcurrentQueue<unit -> unit>()
+
+    member internal x.AddExistingWindow(w : Window) =
+        existingWindows.Add w |> ignore
+        glfw.PostEmptyEvent()
+
+    member internal x.RemoveExistingWindow(w : Window) =
+        existingWindows.Remove w |> ignore
+        visibleWindows.Remove w |> ignore
+        glfw.PostEmptyEvent()
+
+    member internal x.AddVisibleWindow(w : Window) =
+        visibleWindows.Add w |> ignore
+        glfw.PostEmptyEvent()
+
+    member internal x.RemoveVisibleWindow(w : Window) =
+        visibleWindows.Remove w |> ignore
+        glfw.PostEmptyEvent()
+
+    member x.Glfw = glfw
+
+    member x.IsMainThread = Application.IsMainThread_
+
+    member x.Post(action : unit -> unit) =
+        if Application.IsMainThread_ then
+            try action()
+            with _ -> ()            
+        else        
+            queue.Enqueue(action)
+            glfw.PostEmptyEvent()
+
+    member x.StartTask<'r>(action : unit -> 'r) : Task<'r> =
+        if Application.IsMainThread_ then
+            try
+                let v = action()
+                Task.FromResult v
+            with e ->
+                Task.FromException<'r> e          
+        else        
+            let tcs = TaskCompletionSource<'r>()
+            x.Post(fun () ->
+                try 
+                    let v = action()
+                    tcs.SetResult v
+                with
+                | :? System.OperationCanceledException -> tcs.SetCanceled()       
+                | e -> tcs.SetException e            
+            )     
+            tcs.Task           
+
+    member x.Invoke<'r>(action : unit -> 'r) : 'r =
+        if Application.IsMainThread_ then
+            action()
+        else                
+            let l = obj()
+            let mutable res = None
+            x.Post(fun () ->
+                let value = 
+                    try Result.Ok (action())
+                    with e -> Result.Error e    
+                lock l (fun () ->
+                    res <- Some value
+                    Monitor.PulseAll l
+                )            
+            )     
+            lock l (fun () ->
+                while Option.isNone res do
+                    Monitor.Wait l |> ignore
+                match res.Value with
+                | Result.Ok v -> v
+                | Result.Error e -> raise e         
+            )      
+
+    member x.CreateWindow(cfg : WindowConfig) =
+        x.Invoke(fun () ->
+            let mutable glContext = false
+            let mutable parent : nativeptr<WindowHandle> = NativePtr.zero
+            glfw.DefaultWindowHints()
+
+            match cfg.opengl with
+            | Some (major, minor) ->
+                glContext <- true
+                glfw.WindowHint(WindowHintClientApi.ClientApi, ClientApi.OpenGL)
+                glfw.WindowHint(WindowHintInt.ContextVersionMajor, major)
+                glfw.WindowHint(WindowHintInt.ContextVersionMinor, minor)
+                glfw.WindowHint(WindowHintInt.DepthBits, 24)
+                glfw.WindowHint(WindowHintInt.StencilBits, 8)
+
+
+                let m = glfw.GetPrimaryMonitor()
+                let mode = glfw.GetVideoMode(m) |> NativePtr.read
+                glfw.WindowHint(WindowHintInt.RedBits, mode.RedBits)
+                glfw.WindowHint(WindowHintInt.GreenBits, mode.GreenBits)
+                glfw.WindowHint(WindowHintInt.BlueBits, mode.BlueBits)
+                glfw.WindowHint(WindowHintInt.AlphaBits, if cfg.transparent then 8 else 0)
+                glfw.WindowHint(WindowHintInt.RefreshRate, mode.RefreshRate)
+                glfw.WindowHint(WindowHintOpenGlProfile.OpenGlProfile, OpenGlProfile.Core)
+                glfw.WindowHint(WindowHintRobustness.ContextRobustness, Robustness.LoseContextOnReset)
+                glfw.WindowHint(WindowHintBool.OpenGLForwardCompat, true)
+                glfw.WindowHint(WindowHintBool.DoubleBuffer, true)
+                glfw.WindowHint(WindowHintBool.OpenGLDebugContext, false)
+                glfw.WindowHint(WindowHintBool.ContextNoError, true)
+                if RuntimeInformation.IsOSPlatform(OSPlatform.OSX) then
+                    glfw.WindowHint(unbox<WindowHintBool> 0x00023001, cfg.physicalSize)
+
+                glfw.WindowHint(unbox<WindowHintBool> 0x0002200C, false)
+                match lastWindow with
+                | Some l -> parent <- l
+                | None -> ()
+            | None ->
+                glfw.WindowHint(WindowHintClientApi.ClientApi, ClientApi.NoApi)
+
+            glfw.WindowHint(WindowHintBool.TransparentFramebuffer, cfg.transparent)
+            glfw.WindowHint(WindowHintBool.Visible, false)
+            glfw.WindowHint(WindowHintBool.Resizable, cfg.resizable)
+            glfw.WindowHint(WindowHintInt.RefreshRate, cfg.refreshRate)
+            glfw.WindowHint(WindowHintBool.FocusOnShow, cfg.focus)
+
+
+            let m = glfw.GetPrimaryMonitor()
+
+            let win = glfw.CreateWindow(cfg.width, cfg.height, cfg.title, NativePtr.zero, parent)
+            if win = NativePtr.zero then failwith "GLFW could not create window"
+
+
+            let code = glfw.GetKeyScancode(int Keys.Z)
+            Log.warn "Z = %A" code      
+
+            if glContext then lastWindow <- Some win
+
+            let ctx =
+                if glContext then new OpenTKContext.MyGraphicsContext(glfw, win) :> OpenTK.Graphics.IGraphicsContext        
+                else null
+
+            let info =
+                new OpenTKContext.MyWindowInfo(win)
+
+            if not (isNull ctx) then  
+                ctx.MakeCurrent info
+                ctx.LoadAll()          
+
+            glfw.MakeContextCurrent(NativePtr.zero)
+            glfw.SwapInterval(0)
+            Window(x, win, cfg.title, ctx, info)
+        )        
+
+    member x.Run([<System.ParamArray>] ws : Window[]) =
+        running <- true
+        for w in ws do
+            w.IsVisible <- true
+        while existingWindows.Count > 0 do
+            glfw.WaitEvents()
+            let mutable action = Unchecked.defaultof<unit -> unit>
+            while queue.TryDequeue(&action) do
+                try action()
+                with _ -> ()
+
+            for w in visibleWindows do
+                w.Redraw()
+ 
+        running <- false   
+
+
+and Window internal(app : Application, win : nativeptr<WindowHandle>, title : string, ctx : OpenTK.Graphics.IGraphicsContext, info : OpenTK.Platform.IWindowInfo) as this =
     static let keyNameCache = System.Collections.Concurrent.ConcurrentDictionary<Keys * int, string>()
 
-    let mutable closing = false
-    let eventLock = obj()
-    let mutable events = System.Collections.Generic.List<WindowEvent>()
-    let mutable mainThread : Thread = null
-    
-    let mutable framebufferSize = V2i.II
+    let glfw = app.Glfw
+
     let mutable windowScale = V2d.II
     let mutable damaged = true
     let mutable title = title
     let mutable icon : option<PixImageMipMap> = None
     let mutable lastMousePosition = V2d.Zero
+
+    do app.AddExistingWindow this
 
     let getWindowState() =
         let vis = glfw.GetWindowAttrib(win, WindowAttributeGetter.Visible)
@@ -468,9 +664,6 @@ type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, title : string,
     let mouseWheel = Event<V2d>()
     let mouseEnter = Event<V2d>()
     let mouseLeave = Event<V2d>()
-    
-
-
 
     let getFrameBorder() =
         if glfw.GetWindowAttrib(win, WindowAttributeGetter.Decorated) && glfw.GetWindowMonitor(win) = NativePtr.zero then
@@ -517,7 +710,12 @@ type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, title : string,
 
         lastMousePosition
 
-    let mutable mouseInside = getMousePosition() 
+    let resizeCb =
+        glfw.SetWindowSizeCallback(win, GlfwCallbacks.WindowSizeCallback(fun _ w h ->
+            let evt = getResizeEvent()
+            resize.Trigger evt     
+            damaged <- true
+        ))
 
     let maxCb =
         glfw.SetWindowMaximizeCallback(win, GlfwCallbacks.WindowMaximizeCallback(fun w b ->
@@ -534,7 +732,8 @@ type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, title : string,
     let closingCallback = 
         glfw.SetWindowCloseCallback(win, GlfwCallbacks.WindowCloseCallback(fun w ->
             closeEvt.Trigger()
-            closing <- true
+            glfw.HideWindow(win)
+            app.RemoveExistingWindow this
         ))
 
     let focusCallback =
@@ -624,6 +823,7 @@ type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, title : string,
 
     member x.Dispose() =
         glfw.HideWindow(win)
+        app.RemoveExistingWindow x
         glfw.DestroyWindow(win)
         ctx.Dispose()
         info.Dispose()
@@ -744,37 +944,8 @@ type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, title : string,
             | Run action -> action()
             | Resize -> resize.Trigger(getResizeEvent())
 
-    member internal x.Post(msg : WindowEvent) =
-        lock eventLock (fun () ->
-            events.Add msg
-        )
-        glfw.PostEmptyEvent()
-
     member x.Invoke<'r>(action : unit -> 'r) : 'r =
-        let t = Thread.CurrentThread
-        if t = mainThread || isNull mainThread then
-            mainThread <- t
-            action()
-        else            
-            let m = obj()
-            let mutable result : option<Result<'r, exn>> = None
-            let run() =
-                let value = 
-                    try action() |> Result.Ok
-                    with e -> Result.Error e
-                lock m (fun () ->
-                    result <- Some value
-                    Monitor.PulseAll m
-                )
-            x.Post(Run(run))
-            lock m (fun () ->
-                while Option.isNone result do
-                    Monitor.Wait(m) |> ignore
-            )
-
-            match result.Value with
-            | Result.Ok v -> v
-            | Result.Error e -> raise e
+        app.Invoke(action)
 
 
     member x.IsVisible 
@@ -782,8 +953,12 @@ type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, title : string,
             x.Invoke(fun () -> glfw.GetWindowAttrib(win, WindowAttributeGetter.Visible))         
         and set v =
             x.Invoke (fun () ->
-                if v then glfw.ShowWindow(win)
-                else  glfw.HideWindow(win)
+                if v then 
+                    app.AddVisibleWindow x
+                    glfw.ShowWindow(win)
+                else
+                    app.RemoveVisibleWindow x
+                    glfw.HideWindow(win)
             )
 
     member x.Title 
@@ -907,163 +1082,122 @@ type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, title : string,
     member x.Close() =
         x.Invoke(fun () ->
             glfw.HideWindow(win)
-            closing <- true
+            app.RemoveExistingWindow x
         )
 
-    member x.Run() =
-        mainThread <- Thread.CurrentThread
-        closing <- false
-        x.IsVisible <- true
-        let mutable frameCounter = 0
-        let sw = System.Diagnostics.Stopwatch.StartNew()
-
-        while not closing do
-            glfw.WaitEvents()
-            let myEvents = 
-                lock eventLock (fun () ->
-                    let o = events
-                    if o.Count > 0 then 
-                        events <- System.Collections.Generic.List()
-                        o :> seq<_>
-                    else
-                        Seq.empty
-                ) 
-            let myEvents =     
-                let mutable s = V2i.Zero            
-                glfw.GetFramebufferSize(win, &s.X, &s.Y)       
-                if s <> framebufferSize then 
-                    framebufferSize <- s
-                    damaged <- true
-                    Seq.append (Seq.singleton Resize) myEvents
-                else 
-                    myEvents
-
-
-            x.RunEvents myEvents
-
-            if damaged then
+    member internal x.Redraw() =
+        if x.IsVisible then
+            
+            if true || damaged then
                 damaged <- false
                 if not (isNull ctx) then
+                    ctx.MakeCurrent(info)
                     let s = x.FramebufferSize
                     GL.Viewport(0, 0, s.X, s.Y)
                     GL.ClearColor(1.0f, 0.0f, 0.0f, 0.5f)
                     GL.Clear(ClearBufferMask.ColorBufferBit)
 
-                    glfw.SwapBuffers(win)   
+                    glfw.SwapBuffers(win)  
+                    ctx.MakeCurrent(null)    
 
-                if frameCounter >= 100 then
-                    sw.Stop()
-                    Log.line "%.2ffps" (float frameCounter / sw.Elapsed.TotalSeconds)
-                    frameCounter <- 0
-                    sw.Restart()                
+    member x.Run() =
+        app.Run(x)
 
 
-                frameCounter <- frameCounter + 1                     
-            
+
+                
 
 
 
 
 
-type WindowConfig =
-    {
-        title : string
-        width : int
-        height : int
-        focus : bool
-        resizable : bool
-        refreshRate : int
-        transparent : bool
-        opengl : option<int*int>
-        physicalSize : bool
-    }    
 
-module Window = 
-    let private l = obj()
-    let mutable private lastWindow = None
+// module Window = 
+//     let private l = obj()
+//     let mutable private lastWindow = None
    
-    let private glfw = Glfw.GetApi()
-    do if not (glfw.Init()) then
-        failwith "GLFW init failed"
+//     let private glfw = Glfw.GetApi()
+//     do if not (glfw.Init()) then
+//         failwith "GLFW init failed"
 
-    let private dummyWindow =
-        glfw.WindowHint(WindowHintClientApi.ClientApi, ClientApi.NoApi)
-        glfw.WindowHint(WindowHintBool.Visible, false)
-        glfw.WindowHint(WindowHintBool.Resizable, false)
-        glfw.WindowHint(WindowHintBool.Decorated, false)
-        glfw.WindowHint(WindowHintBool.TransparentFramebuffer, true)
-        let win = glfw.CreateWindow(1, 1, "", NativePtr.zero, NativePtr.zero)
-        glfw.SetWindowPos(win, 1000000000, 1000000000)
-        win
+//     let private dummyWindow =
+//         glfw.WindowHint(WindowHintClientApi.ClientApi, ClientApi.NoApi)
+//         glfw.WindowHint(WindowHintBool.Visible, false)
+//         glfw.WindowHint(WindowHintBool.Resizable, false)
+//         glfw.WindowHint(WindowHintBool.Decorated, false)
+//         glfw.WindowHint(WindowHintBool.TransparentFramebuffer, true)
+//         let win = glfw.CreateWindow(1, 1, "", NativePtr.zero, NativePtr.zero)
+//         glfw.SetWindowPos(win, 1000000000, 1000000000)
+//         win
 
-    let create (cfg : WindowConfig) =
-        lock l (fun () ->
-            let mutable glContext = false
-            let mutable parent : nativeptr<WindowHandle> = NativePtr.zero
-            glfw.DefaultWindowHints()
+//     let create (cfg : WindowConfig) =
+//         lock l (fun () ->
+//             let mutable glContext = false
+//             let mutable parent : nativeptr<WindowHandle> = NativePtr.zero
+//             glfw.DefaultWindowHints()
 
-            match cfg.opengl with
-            | Some (major, minor) ->
-                glContext <- true
-                glfw.WindowHint(WindowHintClientApi.ClientApi, ClientApi.OpenGL)
-                glfw.WindowHint(WindowHintInt.ContextVersionMajor, major)
-                glfw.WindowHint(WindowHintInt.ContextVersionMinor, minor)
-                glfw.WindowHint(WindowHintInt.DepthBits, 24)
-                glfw.WindowHint(WindowHintInt.StencilBits, 8)
-
-
-                let m = glfw.GetPrimaryMonitor()
-                let mode = glfw.GetVideoMode(m) |> NativePtr.read
-                glfw.WindowHint(WindowHintInt.RedBits, mode.RedBits)
-                glfw.WindowHint(WindowHintInt.GreenBits, mode.GreenBits)
-                glfw.WindowHint(WindowHintInt.BlueBits, mode.BlueBits)
-                glfw.WindowHint(WindowHintInt.AlphaBits, if cfg.transparent then 8 else 0)
-                glfw.WindowHint(WindowHintInt.RefreshRate, mode.RefreshRate)
-                glfw.WindowHint(WindowHintOpenGlProfile.OpenGlProfile, OpenGlProfile.Core)
-                glfw.WindowHint(WindowHintRobustness.ContextRobustness, Robustness.LoseContextOnReset)
-                glfw.WindowHint(WindowHintBool.OpenGLForwardCompat, true)
-                glfw.WindowHint(WindowHintBool.DoubleBuffer, true)
-                glfw.WindowHint(WindowHintBool.OpenGLDebugContext, false)
-                glfw.WindowHint(WindowHintBool.ContextNoError, true)
-                if RuntimeInformation.IsOSPlatform(OSPlatform.OSX) then
-                    glfw.WindowHint(unbox<WindowHintBool> 0x00023001, cfg.physicalSize)
-
-                glfw.WindowHint(unbox<WindowHintBool> 0x0002200C, false)
-                match lastWindow with
-                | Some l -> parent <- l
-                | None -> ()
-            | None ->
-                glfw.WindowHint(WindowHintClientApi.ClientApi, ClientApi.NoApi)
-
-            glfw.WindowHint(WindowHintBool.TransparentFramebuffer, cfg.transparent)
-            glfw.WindowHint(WindowHintBool.Visible, false)
-            glfw.WindowHint(WindowHintBool.Resizable, cfg.resizable)
-            glfw.WindowHint(WindowHintInt.RefreshRate, cfg.refreshRate)
-            glfw.WindowHint(WindowHintBool.FocusOnShow, cfg.focus)
+//             match cfg.opengl with
+//             | Some (major, minor) ->
+//                 glContext <- true
+//                 glfw.WindowHint(WindowHintClientApi.ClientApi, ClientApi.OpenGL)
+//                 glfw.WindowHint(WindowHintInt.ContextVersionMajor, major)
+//                 glfw.WindowHint(WindowHintInt.ContextVersionMinor, minor)
+//                 glfw.WindowHint(WindowHintInt.DepthBits, 24)
+//                 glfw.WindowHint(WindowHintInt.StencilBits, 8)
 
 
-            let m = glfw.GetPrimaryMonitor()
+//                 let m = glfw.GetPrimaryMonitor()
+//                 let mode = glfw.GetVideoMode(m) |> NativePtr.read
+//                 glfw.WindowHint(WindowHintInt.RedBits, mode.RedBits)
+//                 glfw.WindowHint(WindowHintInt.GreenBits, mode.GreenBits)
+//                 glfw.WindowHint(WindowHintInt.BlueBits, mode.BlueBits)
+//                 glfw.WindowHint(WindowHintInt.AlphaBits, if cfg.transparent then 8 else 0)
+//                 glfw.WindowHint(WindowHintInt.RefreshRate, mode.RefreshRate)
+//                 glfw.WindowHint(WindowHintOpenGlProfile.OpenGlProfile, OpenGlProfile.Core)
+//                 glfw.WindowHint(WindowHintRobustness.ContextRobustness, Robustness.LoseContextOnReset)
+//                 glfw.WindowHint(WindowHintBool.OpenGLForwardCompat, true)
+//                 glfw.WindowHint(WindowHintBool.DoubleBuffer, true)
+//                 glfw.WindowHint(WindowHintBool.OpenGLDebugContext, false)
+//                 glfw.WindowHint(WindowHintBool.ContextNoError, true)
+//                 if RuntimeInformation.IsOSPlatform(OSPlatform.OSX) then
+//                     glfw.WindowHint(unbox<WindowHintBool> 0x00023001, cfg.physicalSize)
 
-            let win = glfw.CreateWindow(cfg.width, cfg.height, cfg.title, NativePtr.zero, parent)
-            if win = NativePtr.zero then failwith "GLFW could not create window"
+//                 glfw.WindowHint(unbox<WindowHintBool> 0x0002200C, false)
+//                 match lastWindow with
+//                 | Some l -> parent <- l
+//                 | None -> ()
+//             | None ->
+//                 glfw.WindowHint(WindowHintClientApi.ClientApi, ClientApi.NoApi)
+
+//             glfw.WindowHint(WindowHintBool.TransparentFramebuffer, cfg.transparent)
+//             glfw.WindowHint(WindowHintBool.Visible, false)
+//             glfw.WindowHint(WindowHintBool.Resizable, cfg.resizable)
+//             glfw.WindowHint(WindowHintInt.RefreshRate, cfg.refreshRate)
+//             glfw.WindowHint(WindowHintBool.FocusOnShow, cfg.focus)
 
 
-            let code = glfw.GetKeyScancode(int Keys.Z)
-            Log.warn "Z = %A" code      
+//             let m = glfw.GetPrimaryMonitor()
 
-            if glContext then lastWindow <- Some win
+//             let win = glfw.CreateWindow(cfg.width, cfg.height, cfg.title, NativePtr.zero, parent)
+//             if win = NativePtr.zero then failwith "GLFW could not create window"
 
-            let ctx =
-                if glContext then new OpenTKContext.MyGraphicsContext(glfw, win) :> OpenTK.Graphics.IGraphicsContext        
-                else null
 
-            let info =
-                new OpenTKContext.MyWindowInfo(win)
+//             let code = glfw.GetKeyScancode(int Keys.Z)
+//             Log.warn "Z = %A" code      
 
-            if not (isNull ctx) then  
-                ctx.MakeCurrent info
-                ctx.LoadAll()          
+//             if glContext then lastWindow <- Some win
 
-            glfw.SwapInterval(0)
-            Window(glfw, win, cfg.title, ctx, info)
-        )
+//             let ctx =
+//                 if glContext then new OpenTKContext.MyGraphicsContext(glfw, win) :> OpenTK.Graphics.IGraphicsContext        
+//                 else null
+
+//             let info =
+//                 new OpenTKContext.MyWindowInfo(win)
+
+//             if not (isNull ctx) then  
+//                 ctx.MakeCurrent info
+//                 ctx.LoadAll()          
+
+//             glfw.SwapInterval(0)
+//             Window(glfw, win, cfg.title, ctx, info)
+//         )

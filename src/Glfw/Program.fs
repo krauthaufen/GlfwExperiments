@@ -7,9 +7,10 @@ open Aardvark.Application
 
 [<EntryPoint;STAThread>]
 let main argv = 
+    let app = Application()
 
     let win = 
-        Window.create {
+        app.CreateWindow {
             title = "Dummy"            
             width = 1024
             height = 768
@@ -21,6 +22,7 @@ let main argv =
             transparent = true
         }
 
+    
     
     win.WindowPositionChanged.Add(fun e ->
         Log.warn "move: %A" e
@@ -76,6 +78,10 @@ let main argv =
             win.Fullcreen <- not win.Fullcreen
     )
 
+    win.WindowStateChanged.Add (fun s ->
+        Log.warn "%A" s
+    )
+
     win.KeyInput.Add(fun str ->
         Log.warn "input: %A" str
     )
@@ -87,7 +93,6 @@ let main argv =
     win.MouseWheel.Add (fun e ->
         Log.warn "wheel: %A" e
     )
-
 
     win.KeyUp.Add(fun e ->
         Log.warn "%A" e
@@ -125,8 +130,29 @@ let main argv =
 
     let icon = sizes |> Array.map (fun s -> createIcon (V2i.II * s) :> PixImage) |> PixImageMipMap
     win.Icon <- Some icon
+
+    let thread = 
+        startThread (fun () ->
+            while true do
+                let line = Console.ReadLine()
+                let win2 = 
+                    app.CreateWindow {
+                        title = "Dummy2"            
+                        width = 200
+                        height = 200
+                        resizable = true
+                        focus = true
+                        refreshRate = 0
+                        opengl = Some(4,1)
+                        physicalSize = false
+                        transparent = true
+                    }
+                win2.IsVisible <- true                
+        )
+
+
     //win.Icon <- None
-    win.Run()
+    app.Run(win)
     // Ag.initialize()
     // Aardvark.Init()
 
