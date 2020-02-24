@@ -10,6 +10,7 @@ nuget Aardvark.Base.FSharp                  ~> 5.0.0-prerelease0008
 nuget Silk.NET.GLFW                         ~> 1.0.0-preview5
 nuget Silk.NET.OpenGL                       ~> 1.0.0-preview5
 nuget Unofficial.OpenTK                     ~> 3.0.17
+nuget Aardvark.Application                  ~> 5.0.0-prerelease0006
 
 group Build
 framework: netstandard2.0

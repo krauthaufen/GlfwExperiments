@@ -9,24 +9,244 @@ open System.Runtime.InteropServices
 
 #nowarn "9"
 
+module private Translations =
+
+    type K = Silk.NET.GLFW.Keys
+    type A = Aardvark.Application.Keys
+
+    let table (elements : array<'a * 'b>) =
+        let dict = System.Collections.Generic.Dictionary<'a, 'b>()
+        for (k,v) in elements do
+            dict.[k] <- v
+        fun k ->
+            let mutable v = Unchecked.defaultof<'b>
+            if dict.TryGetValue(k, &v) then
+                ValueSome v
+            else
+                ValueNone           
+
+    let getKeyByName =
+        table [|
+            "A", A.A
+            "B", A.B
+            "C", A.C
+            "D", A.D
+            "E", A.E
+            "F", A.F
+            "G", A.G
+            "H", A.H
+            "I", A.I
+            "J", A.J
+            "K", A.K
+            "L", A.L
+            "M", A.M
+            "N", A.N
+            "O", A.O
+            "P", A.P
+            "Q", A.Q
+            "R", A.R
+            "S", A.S
+            "T", A.T
+            "U", A.U
+            "V", A.V
+            "W", A.W
+            "X", A.X
+            "Y", A.Y
+            "Z", A.Z
+
+            "-", A.OemMinus
+            ".", A.OemPeriod
+            "+", A.OemPlus
+            ",", A.OemComma
+            ";", A.OemSemicolon
+
+            "ß", A.OemOpenBrackets
+            "´", A.Oem6
+            "Ü", A.Oem1
+            "Ö", A.Oem3
+            "Ä", A.OemQuotes
+            "#", A.OemQuestion
+            "^", A.Oem5
+            "<", A.OemBackslash
+        |]
+
+    let getKeyByKey = 
+        table [|
+            K.A, A.A
+            K.AltLeft, A.LeftAlt
+            K.AltRight, A.RightAlt
+            K.Apostrophe, A.OemQuotes
+            K.B, A.B
+            K.BackSlash, A.OemBackslash
+            K.Backspace, A.Back
+            K.C, A.C
+            K.CapsLock, A.CapsLock
+            K.Comma, A.OemComma
+            K.ControlLeft, A.LeftCtrl
+            K.ControlRight, A.RightCtrl
+            K.D, A.D
+            K.D0, A.D0
+            K.Delete, A.Delete
+            K.Down, A.Down
+            K.E, A.E
+            K.End, A.End
+            K.Enter, A.Enter
+            K.Equal, A.None // TODO
+            K.Escape, A.Escape
+            K.F, A.F
+            K.F1, A.F1
+            K.F2, A.F2
+            K.F3, A.F3
+            K.F4, A.F4
+            K.F5, A.F5
+            K.F6, A.F6
+            K.F7, A.F7
+            K.F8, A.F8
+            K.F9, A.F9
+            K.F10, A.F10
+            K.F11, A.F11
+            K.F12, A.F12
+            K.F13, A.F13
+            K.F14, A.F14
+            K.F15, A.F15
+            K.F16, A.F16
+            K.F17, A.F17
+            K.F18, A.F18
+            K.F19, A.F19
+            K.F20, A.F20
+            K.F21, A.F21
+            K.F22, A.F22
+            K.F23, A.F23
+            K.F24, A.F24
+            K.F25, A.None
+            K.G, A.G
+            K.GraveAccent, A.Oem5
+            K.H, A.H
+            K.Home, A.Home
+            K.I, A.I
+            K.Insert, A.Insert
+            K.J, A.J
+            K.K, A.K
+            K.Keypad0, A.NumPad0
+            K.Keypad1, A.NumPad1
+            K.Keypad2, A.NumPad2
+            K.Keypad3, A.NumPad3
+            K.Keypad4, A.NumPad4
+            K.Keypad5, A.NumPad5
+            K.Keypad6, A.NumPad6
+            K.Keypad7, A.NumPad7
+            K.Keypad8, A.NumPad8
+            K.Keypad9, A.NumPad9
+            K.KeypadAdd, A.Add
+            K.KeypadDecimal, A.Decimal
+            K.KeypadDivide, A.Divide
+            K.KeypadEnter, A.Return
+            K.KeypadEqual, A.None // TODO
+            K.KeypadMultiply, A.Multiply
+            K.KeypadSubtract, A.Subtract
+            K.L, A.L
+            K.LastKey, A.None // TODO
+            K.Left, A.Left
+            K.LeftBracket, A.None // TODO
+            K.M, A.M
+            K.Menu, A.None // TODO
+            K.Minus, A.OemMinus
+            K.N, A.N
+            K.Number1, A.D1
+            K.Number2, A.D2
+            K.Number3, A.D3
+            K.Number4, A.D4
+            K.Number5, A.D5
+            K.Number6, A.D6
+            K.Number7, A.D7
+            K.Number8, A.D8
+            K.Number9, A.D9
+            K.NumLock, A.NumLock
+            K.O, A.O
+            K.P, A.P
+            K.PageDown, A.PageDown
+            K.PageUp, A.PageUp
+            K.Pause, A.Pause
+            K.Period, A.OemPeriod
+            K.PrintScreen, A.PrintScreen
+            K.Q, A.Q
+            K.R, A.R
+            K.Right, A.Right
+            K.RightBracket, A.None // TODO
+            K.S, A.S
+            K.ScrollLock, A.Scroll
+            K.Semicolon, A.OemSemicolon
+            K.ShiftLeft, A.LeftShift
+            K.ShiftRight, A.RightShift
+            K.Slash, A.None // TODO
+            K.Space, A.Space
+            K.SuperLeft, A.LWin
+            K.SuperRight, A.RWin
+            K.T, A.T
+            K.Tab, A.Tab
+            K.U, A.U
+            K.Unknown, A.None
+            K.Up, A.Up
+            K.V, A.V
+            K.W, A.W
+            K.World1, A.None // TODO
+            K.World2, A.None // TODO
+            K.X, A.X
+            K.Y, A.Y
+            K.Z, A.Z
+
+        |]
+
+    let tryGetKey (k : Keys) (scan : int) (name : string) =     
+        match getKeyByName name with
+        | ValueSome k when k <> A.None -> ValueSome k
+        | _ ->
+            match getKeyByKey k with
+            | ValueSome k  when k <> A.None -> ValueSome k
+            | _ ->  
+                if RuntimeInformation.IsOSPlatform OSPlatform.Windows then
+                    let k = Aardvark.Application.KeyConverter.keyFromVirtualKey scan
+                    if k <> A.None then ValueSome k
+                    else ValueNone
+                else
+                    ValueNone               
+
+
+    let toMouseButton (b : MouseButton) =
+        match b with
+        | MouseButton.Left -> Aardvark.Application.MouseButtons.Left
+        | MouseButton.Right -> Aardvark.Application.MouseButtons.Right
+        | MouseButton.Middle -> Aardvark.Application.MouseButtons.Middle
+        | _ -> Aardvark.Application.MouseButtons.None
+
 [<AutoOpen>]
 module MissingGlfwFunctions =
     open System.Runtime.InteropServices
 
     type private GetWindowContentScaleDel = delegate of nativeptr<WindowHandle> * byref<float32> * byref<float32> -> unit
 
-    let private dict = System.Collections.Concurrent.ConcurrentDictionary<Glfw, GetWindowContentScaleDel>()
+    type private GetKeyNameDel = delegate of Keys * int -> nativeint
+
+    let private scaleDict = System.Collections.Concurrent.ConcurrentDictionary<Glfw, GetWindowContentScaleDel>()
+    let private keyNameDict = System.Collections.Concurrent.ConcurrentDictionary<Glfw, GetKeyNameDel>()
 
     let private getWindowScale (glfw : Glfw) =
-        dict.GetOrAdd(glfw, fun glfw ->
+        scaleDict.GetOrAdd(glfw, fun glfw ->
             let m = glfw.Library.LoadFunction "glfwGetWindowContentScale"
             Marshal.GetDelegateForFunctionPointer(m, typeof<GetWindowContentScaleDel>) |> unbox<GetWindowContentScaleDel>
+        )
+    let private getKeyName (glfw : Glfw) =
+        keyNameDict.GetOrAdd(glfw, fun glfw ->
+            let m = glfw.Library.LoadFunction "glfwGetKeyName"
+            Marshal.GetDelegateForFunctionPointer(m, typeof<GetKeyNameDel>) |> unbox<GetKeyNameDel>
         )
 
     type Glfw with
         member x.GetWindowContentScale(win : nativeptr<WindowHandle>, [<Out>] sx : byref<float32>, [<Out>] sy : byref<float32>) =
             getWindowScale(x).Invoke(win, &sx, &sy)
-
+        member x.GetKeyNamePtr(key : Keys, code : int) =
+            let ptr = getKeyName(x).Invoke(key, code)
+            Marshal.PtrToStringUTF8 ptr
 
 module internal OpenTKContext = 
     open System.Runtime.InteropServices
@@ -37,9 +257,11 @@ module internal OpenTKContext =
     open OpenTK.Graphics.OpenGL4
 
     type MyWindowInfo(win : nativeptr<WindowHandle>) =
+        let mutable win = win
         interface OpenTK.Platform.IWindowInfo with
             member x.Dispose(): unit = 
-                ()
+                win <- NativePtr.zero
+
             member x.Handle: nativeint = 
                 NativePtr.toNativeInt win
     
@@ -48,7 +270,10 @@ module internal OpenTKContext =
         [<System.ThreadStaticAttribute; DefaultValue>]
         static val mutable private CurrentContext : OpenTK.ContextHandle
 
+        let mutable win = win
+
         static let addContext = typeof<GraphicsContext>.GetMethod("AddContext", BindingFlags.NonPublic ||| BindingFlags.Static)
+        static let remContext = typeof<GraphicsContext>.GetMethod("RemoveContext", BindingFlags.NonPublic ||| BindingFlags.Static)
 
 
         static do 
@@ -67,6 +292,8 @@ module internal OpenTKContext =
         
         interface IGraphicsContext with
             member x.Dispose(): unit = 
+                remContext.Invoke(null, [| x :> obj |]) |> ignore
+                win <- NativePtr.zero
                 ()
 
             member x.ErrorChecking
@@ -79,7 +306,7 @@ module internal OpenTKContext =
             member x.IsCurrent =
                 glfw.GetCurrentContext() = win
             member x.IsDisposed: bool = 
-                false
+                win = NativePtr.zero
             member x.LoadAll() = x.LoadAll()
             member x.MakeCurrent(window: IWindowInfo): unit = 
                 if isNull window then 
@@ -115,11 +342,9 @@ type internal WindowEvent =
     | Run of action : (unit -> unit)
 
 
-type KeyEvent(key : Keys, scanCode : int, action : InputAction, modifiers : KeyModifiers, keyName : string) =
+type KeyEvent internal(key : Aardvark.Application.Keys, scanCode : int, action : InputAction, modifiers : KeyModifiers, keyName : string) =
     member x.Key = key
     member x.ScanCode = scanCode
-    member x.Action = action
-    member x.Modifiers = modifiers    
     member x.Name = keyName  
 
     member x.IsRepeat = action = InputAction.Repeat
@@ -144,7 +369,7 @@ type KeyEvent(key : Keys, scanCode : int, action : InputAction, modifiers : KeyM
                 if x.Super then "super"          
             ]
 
-        sprintf "%s { value: %A; scan: %A; mod: [%s]; name: %s }" kind key scanCode (String.concat "; " modifiers) keyName
+        sprintf "%s { key: %A; scan: %A; mod: [%s]; name: %s }" kind key scanCode (String.concat "; " modifiers) keyName
 
 type ResizeEvent(framebufferSize : V2i, physicalSize : V2i, windowSize : V2i) =
     member x.FramebufferSize = framebufferSize
@@ -154,16 +379,13 @@ type ResizeEvent(framebufferSize : V2i, physicalSize : V2i, windowSize : V2i) =
     override x.ToString() = 
         sprintf "Resize { framebuffer: %A; physical: %A; window: %A }" framebufferSize physicalSize windowSize
 
-
-type MouseEvent(button : MouseButton, position: V2d, action : InputAction, modifiers : KeyModifiers) =
+type MouseEvent internal(button : Aardvark.Application.MouseButtons, position: V2d, action : InputAction, modifiers : KeyModifiers) =
     member x.Button = button
-    member x.Action = action
-    member x.Modifiers = modifiers  
-    member x.IsRepeat = action = InputAction.Repeat
     member x.Alt = int (modifiers &&& KeyModifiers.Alt) <> 0
     member x.Shift = int (modifiers &&& KeyModifiers.Shift) <> 0
     member x.Ctrl = int (modifiers &&& KeyModifiers.Control) <> 0
     member x.Super = int (modifiers &&& KeyModifiers.Super) <> 0
+    member x.Position = position
 
     override x.ToString() =
         let kind =
@@ -180,7 +402,7 @@ type MouseEvent(button : MouseButton, position: V2d, action : InputAction, modif
                 if x.Super then "super"          
             ]
 
-        sprintf "%s { value: %A; mod: [%s]; position: %A }" kind button (String.concat "; " modifiers) position
+        sprintf "%s { button: %A; mod: [%s]; position: %A }" kind button (String.concat "; " modifiers) position
 
 type WindowState =
     | Normal = 0
@@ -190,10 +412,13 @@ type WindowState =
 
 
 type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, title : string, ctx : OpenTK.Graphics.IGraphicsContext, info : OpenTK.Platform.IWindowInfo) =
+    static let keyNameCache = System.Collections.Concurrent.ConcurrentDictionary<Keys * int, string>()
+
     let mutable closing = false
     let eventLock = obj()
     let mutable events = System.Collections.Generic.List<WindowEvent>()
     let mutable mainThread : Thread = null
+    
     let mutable framebufferSize = V2i.II
     let mutable windowScale = V2d.II
     let mutable damaged = true
@@ -212,14 +437,11 @@ type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, title : string,
         else
             WindowState.Invisible        
 
-    let mutable windowState = getWindowState()
-
-    static let keyNameCache = System.Collections.Concurrent.ConcurrentDictionary<Keys * int, string>()
 
     let getKeyName(key : Keys) (code : int) =
         keyNameCache.GetOrAdd((key, code), fun (key, code) ->
             let c = if code >= 0 then code else glfw.GetKeyScancode(int key)
-            let str = glfw.GetKeyName(int key, c)
+            let str = glfw.GetKeyNamePtr(key, c)
             if System.String.IsNullOrWhiteSpace str then
                 string key
             else
@@ -227,6 +449,7 @@ type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, title : string,
                 let b = str.Substring(1)   
                 a.ToUpper() + b
         )
+
     let closeEvt = Event<unit>()    
     let resize = Event<ResizeEvent>()
     let wpChanged = Event<V2i>()
@@ -298,13 +521,13 @@ type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, title : string,
 
     let maxCb =
         glfw.SetWindowMaximizeCallback(win, GlfwCallbacks.WindowMaximizeCallback(fun w b ->
-            windowState <- getWindowState()
+            let windowState = getWindowState()
             stateChanged.Trigger windowState
         ))
 
     let minCb =
         glfw.SetWindowIconifyCallback(win, GlfwCallbacks.WindowIconifyCallback(fun w b ->
-            windowState <- getWindowState()
+            let windowState = getWindowState()
             stateChanged.Trigger windowState
         ))
 
@@ -329,11 +552,15 @@ type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, title : string,
     let keyCallback =
         glfw.SetKeyCallback(win, GlfwCallbacks.KeyCallback(fun w k c a m ->
             let name = getKeyName k c
-            match a with
-            | InputAction.Press -> keyDown.Trigger(KeyEvent(k, c, a, m, name))
-            | InputAction.Repeat -> keyDown.Trigger(KeyEvent(k,c, a, m, name))
-            | InputAction.Release -> keyUp.Trigger(KeyEvent(k, c, a, m, name))
-            | _ -> ()
+            match Translations.tryGetKey k c name with
+            | ValueSome k -> 
+                match a with
+                | InputAction.Press -> keyDown.Trigger(KeyEvent(k, c, a, m, name))
+                | InputAction.Repeat -> keyDown.Trigger(KeyEvent(k,c, a, m, name))
+                | InputAction.Release -> keyUp.Trigger(KeyEvent(k, c, a, m, name))
+                | _ -> ()
+            | ValueNone ->
+                ()       
         ))
 
     let inputCallback =
@@ -359,7 +586,7 @@ type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, title : string,
             let mutable pos = V2d.Zero
             glfw.GetCursorPos(win, &pos.X, &pos.Y)
             let pos = windowScale * pos
-            let evt = MouseEvent(button, pos, action, modifiers)
+            let evt = MouseEvent(Translations.toMouseButton button, pos, action, modifiers)
             match action with
             | InputAction.Press -> mouseDown.Trigger evt    
             | InputAction.Release -> mouseUp.Trigger evt
@@ -391,6 +618,13 @@ type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, title : string,
             if entered then mouseEnter.Trigger(getMousePosition())
             else mouseLeave.Trigger(getMousePosition())
         ))    
+
+    member x.Dispose() =
+        glfw.HideWindow(win)
+        glfw.DestroyWindow(win)
+        ctx.Dispose()
+        info.Dispose()
+
 
     member x.Context = ctx
     member x.WindowInfo = info
@@ -431,16 +665,15 @@ type Window internal(glfw : Glfw, win : nativeptr<WindowHandle>, title : string,
 
 
     member x.WindowState
-        with get() = windowState
+        with get() = 
+            x.Invoke(fun () -> getWindowState())
         and set (s : WindowState) =
             x.Invoke(fun () ->
-                if s <> windowState then
-                    windowState <- s
-                    match s with
-                    | WindowState.Maximized -> glfw.MaximizeWindow(win)
-                    | WindowState.Minimized -> glfw.IconifyWindow(win)
-                    | WindowState.Normal -> glfw.RestoreWindow(win)
-                    | _ -> ()
+                match s with
+                | WindowState.Maximized -> glfw.MaximizeWindow(win)
+                | WindowState.Minimized -> glfw.IconifyWindow(win)
+                | WindowState.Normal -> glfw.RestoreWindow(win)
+                | _ -> ()
             )   
 
     member x.Decorated
@@ -780,6 +1013,9 @@ module Window =
             let win = glfw.CreateWindow(cfg.width, cfg.height, cfg.title, NativePtr.zero, parent)
             if win = NativePtr.zero then failwith "GLFW could not create window"
 
+
+            let code = glfw.GetKeyScancode(int Keys.Z)
+            Log.warn "Z = %A" code      
 
             if glContext then lastWindow <- Some win
 

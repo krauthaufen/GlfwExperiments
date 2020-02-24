@@ -3,6 +3,7 @@ open FSharp.Data.Adaptive
 open Aardvark.Base
 open Aardvark.Base.Rendering
 open Glfw
+open Aardvark.Application
 
 [<EntryPoint;STAThread>]
 let main argv = 
@@ -50,26 +51,26 @@ let main argv =
             if p.Y + s.Y > 1080 then p.Y <- 1080 - s.Y
             win.WindowPosition <- p
 
-        if e.Key = Silk.NET.GLFW.Keys.Escape then win.Close()
-        elif e.Key = Silk.NET.GLFW.Keys.Right then setPos (win.WindowPosition + V2i(20, 0))
-        elif e.Key = Silk.NET.GLFW.Keys.Left then setPos (win.WindowPosition - V2i(20, 0))
-        elif e.Key = Silk.NET.GLFW.Keys.Up then setPos (win.WindowPosition - V2i(0, 20))
-        elif e.Key = Silk.NET.GLFW.Keys.Down then setPos (win.WindowPosition + V2i(0, 20))
-        elif e.Key = Silk.NET.GLFW.Keys.R then win.WindowSize <- V2i(180, 180)
-        elif e.Key = Silk.NET.GLFW.Keys.T then win.WindowSize <- V2i(1024, 768)
-        elif e.Key = Silk.NET.GLFW.Keys.Q then win.FramebufferSize <- V2i(180, 180)
-        elif e.Key = Silk.NET.GLFW.Keys.W then win.FramebufferSize <- V2i(1024, 768)
-        elif e.Key = Silk.NET.GLFW.Keys.Backspace then
+        if e.Key = Keys.Escape then win.Close()
+        elif e.Key = Keys.Right then setPos (win.WindowPosition + V2i(20, 0))
+        elif e.Key = Keys.Left then setPos (win.WindowPosition - V2i(20, 0))
+        elif e.Key = Keys.Up then setPos (win.WindowPosition - V2i(0, 20))
+        elif e.Key = Keys.Down then setPos (win.WindowPosition + V2i(0, 20))
+        elif e.Key = Keys.R then win.WindowSize <- V2i(180, 180)
+        elif e.Key = Keys.T then win.WindowSize <- V2i(1024, 768)
+        elif e.Key = Keys.Q then win.FramebufferSize <- V2i(180, 180)
+        elif e.Key = Keys.W then win.FramebufferSize <- V2i(1024, 768)
+        elif e.Key = Keys.Back then
             match win.WindowState with
             | WindowState.Minimized -> win.WindowState <- WindowState.Normal
             | WindowState.Maximized -> win.WindowState <- WindowState.Normal
             | _ -> win.WindowState <- WindowState.Maximized
-        elif e.Key = Silk.NET.GLFW.Keys.Delete then
+        elif e.Key = Keys.Delete then
             win.Decorated <- not win.Decorated
-        elif e.Key = Silk.NET.GLFW.Keys.Insert then
+        elif e.Key = Keys.Insert then
             win.IsVisible <- false
             System.Threading.Tasks.Task.Delay(1000).ContinueWith(fun _ -> win.IsVisible <- true) |> ignore
-        elif e.Key = Silk.NET.GLFW.Keys.F12 then
+        elif e.Key = Keys.F12 then
             win.Floating <- not win.Floating
     )
 
@@ -87,7 +88,7 @@ let main argv =
 
 
     win.KeyUp.Add(fun e ->
-        Log.warn "up %A" e.Key
+        Log.warn "%A" e
     )
 
     let createIcon (size : V2i) =
