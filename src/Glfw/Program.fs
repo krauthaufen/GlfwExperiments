@@ -17,15 +17,17 @@ let main argv =
             refreshRate = 0
             opengl = Some(4,1)
             physicalSize = false
+            transparent = true
         }
 
-    let name = win.GetKeyName(Silk.NET.GLFW.Keys.Slash)
-    Log.warn "Slash: %s" name
+    
+    win.WindowPositionChanged.Add(fun e ->
+        Log.warn "move: %A" e
+    )
 
-
-    // win.MouseMove.Add (fun e ->
-    //     win.Title <- sprintf "mouse: %s" (e.ToString("0.00"))
-    // )
+    win.MouseMove.Add (fun e ->
+        win.Title <- sprintf "mouse: %s" (e.ToString("0.00"))
+    )
 
     win.FocusChanged.Add(fun e ->
         Log.warn "focus: %A" e
@@ -36,18 +38,39 @@ let main argv =
     )    
 
     win.KeyDown.Add(fun e ->
-        if not e.IsRepeat then
-            if e.Key = Silk.NET.GLFW.Keys.Escape then win.Close()
-            else Log.warn "down %A" e
 
-        if e.Key = Silk.NET.GLFW.Keys.Right then win.WindowPosition <- win.WindowPosition + V2i(20, 0)
-        elif e.Key = Silk.NET.GLFW.Keys.Left then win.WindowPosition <- win.WindowPosition - V2i(20, 0)
-        elif e.Key = Silk.NET.GLFW.Keys.Up then win.WindowPosition <- win.WindowPosition - V2i(0, 20)
-        elif e.Key = Silk.NET.GLFW.Keys.Down then win.WindowPosition <- win.WindowPosition + V2i(0, 20)
-        elif e.Key = Silk.NET.GLFW.Keys.R then win.WindowSize <- V2i(50, 50)
+        let setPos (p : V2i) =
+            let mutable p = p
+            if p.X < 0 then p.X <- 0
+            if p.Y < 0 then p.Y <- 0
+
+            let s = win.WindowSize
+
+            if p.X + s.X > 1920 then p.X <- 1920 - s.X
+            if p.Y + s.Y > 1080 then p.Y <- 1080 - s.Y
+            win.WindowPosition <- p
+
+        if e.Key = Silk.NET.GLFW.Keys.Escape then win.Close()
+        elif e.Key = Silk.NET.GLFW.Keys.Right then setPos (win.WindowPosition + V2i(20, 0))
+        elif e.Key = Silk.NET.GLFW.Keys.Left then setPos (win.WindowPosition - V2i(20, 0))
+        elif e.Key = Silk.NET.GLFW.Keys.Up then setPos (win.WindowPosition - V2i(0, 20))
+        elif e.Key = Silk.NET.GLFW.Keys.Down then setPos (win.WindowPosition + V2i(0, 20))
+        elif e.Key = Silk.NET.GLFW.Keys.R then win.WindowSize <- V2i(180, 180)
         elif e.Key = Silk.NET.GLFW.Keys.T then win.WindowSize <- V2i(1024, 768)
-        elif e.Key = Silk.NET.GLFW.Keys.Q then win.FramebufferSize <- V2i(50, 50)
+        elif e.Key = Silk.NET.GLFW.Keys.Q then win.FramebufferSize <- V2i(180, 180)
         elif e.Key = Silk.NET.GLFW.Keys.W then win.FramebufferSize <- V2i(1024, 768)
+        elif e.Key = Silk.NET.GLFW.Keys.Backspace then
+            match win.WindowState with
+            | WindowState.Minimized -> win.WindowState <- WindowState.Normal
+            | WindowState.Maximized -> win.WindowState <- WindowState.Normal
+            | _ -> win.WindowState <- WindowState.Maximized
+        elif e.Key = Silk.NET.GLFW.Keys.Delete then
+            win.Decorated <- not win.Decorated
+        elif e.Key = Silk.NET.GLFW.Keys.Insert then
+            win.IsVisible <- false
+            System.Threading.Tasks.Task.Delay(1000).ContinueWith(fun _ -> win.IsVisible <- true) |> ignore
+        elif e.Key = Silk.NET.GLFW.Keys.F12 then
+            win.Floating <- not win.Floating
     )
 
     win.KeyInput.Add(fun str ->
